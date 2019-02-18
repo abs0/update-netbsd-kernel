@@ -1,0 +1,121 @@
+#!/bin/sh -e
+
+DEFAULT_KERNEL=GENERIC
+DEFAULT_TARGET=/current
+DEFAULT_BACKUP=/ocurrent
+
+TMPFILE=`mktemp -t ${0##*/}` || exit 1
+REMOTE=http://nyftp.netbsd.org/pub/NetBSD-daily/HEAD/latest
+BACKUP=$DEFAULT_BACKUP
+KERNEL=$DEFAULT_KERNEL
+TARGET=$DEFAULT_TARGET
+
+while getopts b:fhk:nt: f; do
+    case $f in
+        b)        BACKUP=$OPTARG ;;
+        f)        opt_f=1 ;;
+        h | '?')  opt_h=1 ;;
+        k)        KERNEL=$OPTARG ;;
+        n)        opt_n=1 ;;
+        t)        TARGET=$OPTARG ;;
+  esac
+done
+shift $(expr $OPTIND - 1)
+
+if [ -n "$opt_h" ]; then
+    cat << END
+Usage: $0
+ -b back Set backup (default $DEFAULT_BACKUP)
+ -f      Force update even if kernel unchanged
+ -h      This help
+ -k kern Select kernel (default $DEFAULT_KERNEL)
+ -n      Download to check but do not update kernel
+ -t targ Set target (default $DEFAULT_TARGET)
+
+update-kernel will download the latest $KERNEL NetBSD kernel from
+$REMOTE/\$(uname -m)/binary/kernel/netbsd-\$KERNEL.gz,
+and if it does not match $TARGET, rename $TARGET to $BACKUP and save
+the new kernel (still gzipped) as $TARGET.
+
+It will call sudo if needed to update if run as non root.
+
+It is recommended to have something similar to the following in /boot.cfg
+  menu=Boot current:rndseed /var/db/entropy-file;boot current
+  menu=Boot ocurrent:rndseed /var/db/entropy-file;boot ocurrent
+END
+    exit
+fi
+
+compare_kernel()
+{
+   if [ ! -f "$1" ]; then
+       echo "$1 not found"
+       return 2
+   fi
+   if [ ! -f "$2" ]; then
+       echo "$2 not found"
+       return 2
+   fi
+   if [ ! -r "$1" ] || [ ! -r "$2" ]; then
+       $ASROOT cmp -s "$1" "$2"
+   else
+       cmp -s "$1" "$2"
+   fi
+}
+stat_kernel()
+{
+    echo -n "$1: "
+    # Run the gzcat as root if we cannot read the file as the current user
+    if [ ! -f "$1" ];then
+        echo "not found"
+    elif [ -r "$1" ];then
+        gzcat "$1" | strings | grep "^NetBSD.*$KERNEL"
+    else
+        $ASROOT gzcat "$1" | strings | grep "^NetBSD.*$KERNEL"
+    fi
+}
+
+update_kernel()
+{
+    new=$1
+    target=$2
+    backup=$3
+    if [ -f $target ] ; then
+        echo "Update $target (backup in $backup)"
+    else
+        echo "Install new $target"
+    fi
+    if [ -z "$opt_n" ];then
+        return;
+    fi
+    $ASROOT chown root:wheel $new
+    if [ -f $target ] ; then
+        $ASROOT mv $target $backup
+    fi
+    $ASROOT mv $new $target
+}
+
+ftp -o $TMPFILE $REMOTE/$(uname -m)/binary/kernel/netbsd-$KERNEL.gz
+if ! gzip -t $TMPFILE ; then
+    echo "**** Downloaded file fails gzip test"
+    rm -f $TMPFILE
+    exit 1
+fi
+
+if [ $(id -u) = 0 ];then
+   ASROOT=
+else
+   ASROOT=sudo
+fi
+
+if [ ! -f $TARGET ]; then
+    update_kernel $TMPFILE $TARGET
+    stat_kernel $TARGET
+elif [ -z "$opt_f" ] && compare_kernel $TMPFILE $TARGET ; then
+    echo "$TARGET unchanged"
+    rm -f $TMPFILE
+    stat_kernel $TARGET
+else
+    update_kernel $TMPFILE $TARGET $BACKUP
+    stat_kernel $BACKUP $TARGET
+fi
