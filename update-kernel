@@ -85,7 +85,7 @@ update_kernel()
     else
         echo "Install new $target"
     fi
-    if [ -z "$opt_n" ];then
+    if [ -n "$opt_n" ];then
         return;
     fi
     $ASROOT chown root:wheel $new
@@ -117,5 +117,8 @@ elif [ -z "$opt_f" ] && compare_kernel $TMPFILE $TARGET ; then
     stat_kernel $TARGET
 else
     update_kernel $TMPFILE $TARGET $BACKUP
-    stat_kernel $BACKUP $TARGET
+    echo "Old:"
+    stat_kernel $BACKUP
+    echo "New:"
+    stat_kernel $TARGET
 fi
